@@ -488,7 +488,7 @@ def login_page():
             'PATH_TRAVERSAL': r"(\.\.\/|\.\.\\|%2e%2e|\/etc\/passwd|\/etc\/shadow|\/proc\/|\/var\/|windows\\system32|boot\.ini)",
             'BRUTE_FORCE':    None,
             'LDAP_INJECTION': r"(?i)(\*\)\(|\(\||\(&|cn=|dc=|ou=|objectclass=|\)\(|\(\!)",
-            'XXE':            r"(?i)(<!entity|<!DOCTYPE|SYSTEM\s+["']|file:\/\/|expect:\/\/|php:\/\/)",
+            'XXE':            r"(?i)(<!entity|<!DOCTYPE|SYSTEM\s+[\"']|file:\/\/|expect:\/\/|php:\/\/)",
             'RCE':            r"(?i)(system\s*\(|passthru\s*\(|shell_exec\s*\(|popen\s*\(|proc_open\s*\(|base64_decode\s*\(|phpinfo\s*\()",
         }
 
