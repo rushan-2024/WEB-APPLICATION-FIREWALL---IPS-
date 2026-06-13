@@ -53,7 +53,7 @@ requirements.txt
 
 Clone repository:
 
-git clone https://github.com/rushan-2024/mini_project.git
+git clone https://github.com/rushan-2024/WEB-APPLICATION-FIREWALL---IPS-.git
 
 cd mini_project
 
