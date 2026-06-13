@@ -1515,4 +1515,4 @@ if __name__ == '__main__':
     print('  |  Admin password: admin123                  |')
     print('  +=============================================+')
     print()
-    app.run(port=5001, debug=False)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5001)), debug=False)
