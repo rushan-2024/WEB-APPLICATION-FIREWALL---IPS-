@@ -547,8 +547,8 @@ def login_page():
   <div class="card">
     <div class="card-tag">::: DEMO PORTAL :::</div>
     <h3>SYSTEM<br>ACCESS</h3>
-    <div class="card-sub">ROUTED THROUGH WAF :8080</div>
-    <form method="GET" action="http://localhost:8080/login">
+    <div class="card-sub">ROUTED THROUGH WAF (LIVE)</div>
+    <form method="GET" action="/login">
       <label>USERNAME / PAYLOAD</label>
       <input type="text" name="user" id="uname" placeholder="admin" required style="margin-bottom:14px;">
       <label>PASSWORD</label>
@@ -833,7 +833,7 @@ def simulate():
 </div>
 </main>
 <script>
-const W='http://localhost:8080';
+const W='';
 function log(m,c){var t=document.getElementById('result');t.innerHTML+='<div class="'+c+'">'+m+'</div>';t.scrollTop=t.scrollHeight;}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 async function fire(p,label,sev){
@@ -992,8 +992,8 @@ def compare():
 function set(id,v){document.getElementById(id).value=v;}
 async function sendDirect(){
   var p=document.getElementById('nowaf').value,b=document.getElementById('nr');
-  b.className='res-box res-neu';b.innerHTML='> Sending to :5001...';
-  try{var r=await fetch('http://localhost:5001/login?user='+encodeURIComponent(p));
+  b.className='res-box res-neu';b.innerHTML='> Sending directly......';
+  try{var r=await fetch('/login?user='+encodeURIComponent(p));
     var t=await r.text();
     b.className='res-box res-danger';
     b.innerHTML='[VULNERABLE] Reached backend!<br>'+t.substring(0,100)+'<br>[!] No WAF — attack went through';
@@ -1004,8 +1004,8 @@ async function sendDirect(){
 }
 async function sendWAF(){
   var p=document.getElementById('waf').value,b=document.getElementById('wr');
-  b.className='res-box res-neu';b.innerHTML='> Sending through WAF :8080...';
-  try{await fetch('http://localhost:8080/login?user='+encodeURIComponent(p),{mode:'no-cors'});}catch(e){}
+  b.className='res-box res-neu';b.innerHTML='> Sending through WAF......';
+  try{await fetch('/login?user='+encodeURIComponent(p),{mode:'no-cors'});}catch(e){}
   b.className='res-box res-safe';
   b.innerHTML='[WAF] Request intercepted by proxy<br>[BLOCKED] Malicious payload detected<br>[LOGGED] Attack recorded — check /dashboard';
 }
@@ -1320,9 +1320,9 @@ def honeypots():
   </div>
 </div>
 <div style="text-align:center;margin-top:20px;padding-bottom:40px;position:relative;z-index:1;">
-  <a href="http://localhost:8080/.env" class="btn btn-r" style="margin-right:10px;">TEST: Honey Credentials</a>
-  <a href="http://localhost:8080/phpmyadmin" class="btn btn-a" style="margin-right:10px;">TEST: Port Scanner</a>
-  <a href="http://localhost:8080/secret-admin" class="btn btn-c">TEST: Hidden URL</a>
+  <a href="/.env" class="btn btn-r" style="margin-right:10px;">TEST: Honey Credentials</a>
+  <a href="/phpmyadmin" class="btn btn-a" style="margin-right:10px;">TEST: Port Scanner</a>
+  <a href="/secret-admin" class="btn btn-c">TEST: Hidden URL</a>
 </div>
 </main>
 </body></html>""")
@@ -1330,7 +1330,7 @@ def honeypots():
 # ── REPORT PAGE ───────────────────────────────────────────────────────────────
 @app.route('/report')
 def report():
-    return redirect('http://localhost:5003')
+    return redirect('/dashboard')
 
 
 # ── ADMIN PAGE ────────────────────────────────────────────────────────────────
@@ -1415,7 +1415,7 @@ def admin():
 <div class="a-panel" style="animation-delay:0.25s;">
   <div class="a-title">&#128203; LOG MANAGEMENT</div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
-    <a href="http://localhost:5003/download/pdf" class="btn btn-a">DOWNLOAD PDF REPORT</a>
+    <a href="/dashboard" class="btn btn-a">DOWNLOAD PDF REPORT</a>
     <form method="POST" action="/admin-clear-logs" style="display:inline;" onsubmit="return confirm('Clear all attack logs?');"><button type="submit" class="btn btn-r">CLEAR ATTACK LOGS</button></form>
     <form method="POST" action="/admin-clear-blocked" style="display:inline;" onsubmit="return confirm('Unblock ALL IPs?');"><button type="submit" class="btn btn-r">UNBLOCK ALL IPs</button></form>
     <a href="/admin-logout" class="btn btn-c">LOGOUT</a>
