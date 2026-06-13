@@ -475,21 +475,56 @@ def login_page():
     user = request.args.get('user')
     result = result_type = None
     if user:
-        query = f"SELECT * FROM users WHERE id = {user}"
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        try:
-            res = cursor.execute(query).fetchall()
-            if res:
-                result = f'[ACCESS GRANTED] User: {res[0][1]}'
-                result_type = 'success'
-            else:
-                result = '[ACCESS DENIED] No user found'
-                result_type = 'error'
-        except Exception as e:
-            result = f'[DB ERROR] {str(e)}'
+        import re, time
+        ip = request.remote_addr
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # WAF detection patterns
+        import re as _re
+        patterns = {
+            'SQL_INJECTION':  r"(?i)(union[\s+]select|or[\s]+1=1|drop[\s]+table|insert[\s]+into|select[\s]+.*from|--|sleep\s*\(|benchmark\s*\(|1=1|1 or|xp_|exec\s*\(|information_schema|char\s*\(|0x[0-9a-f]+)",
+            'XSS':            r"(?i)(<script|<\/script|javascript:|onerror\s*=|onload\s*=|alert\s*\(|eval\s*\(|document\.cookie|<img|<svg|<iframe|<body|on\w+\s*=)",
+            'CMD_INJECTION':  r"(?i)(;\s*(ls|cat|rm|wget|curl|bash|sh|python|perl|php|nc|ncat|id|whoami|uname)|&&|\|\||`|\$\(|>\s*/|2>&1)",
+            'PATH_TRAVERSAL': r"(\.\.\/|\.\.\\|%2e%2e|\/etc\/passwd|\/etc\/shadow|\/proc\/|\/var\/|windows\\system32|boot\.ini)",
+            'BRUTE_FORCE':    None,
+            'LDAP_INJECTION': r"(?i)(\*\)\(|\(\||\(&|cn=|dc=|ou=|objectclass=|\)\(|\(\!)",
+            'XXE':            r"(?i)(<!entity|<!DOCTYPE|SYSTEM\s+["']|file:\/\/|expect:\/\/|php:\/\/)",
+            'RCE':            r"(?i)(system\s*\(|passthru\s*\(|shell_exec\s*\(|popen\s*\(|proc_open\s*\(|base64_decode\s*\(|phpinfo\s*\()",
+        }
+
+        attack_type = None
+        for atype, pattern in patterns.items():
+            if pattern and _re.search(pattern, user):
+                attack_type = atype
+                break
+
+        if attack_type:
+            # Log the attack
+            blocked, ac = load_blocked()
+            ac[ip] = ac.get(ip, 0) + 1
+            if ac[ip] >= 3:
+                blocked.add(ip)
+            save_blocked(blocked, ac)
+            with open(LOG_FILE, 'a') as lf:
+                lf.write(f"{now} | {attack_type} | {ip} | {user[:80]}\n")
+            result = f'[BLOCKED] {attack_type} detected — payload rejected by WAF'
             result_type = 'error'
-        conn.close()
+        else:
+            query = f"SELECT * FROM users WHERE id = {user}"
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            try:
+                res = cursor.execute(query).fetchall()
+                if res:
+                    result = f'[ACCESS GRANTED] User: {res[0][1]}'
+                    result_type = 'success'
+                else:
+                    result = '[ACCESS DENIED] No user found'
+                    result_type = 'error'
+            except Exception as e:
+                result = f'[DB ERROR] {str(e)}'
+                result_type = 'error'
+            conn.close()
     return render_template_string("""<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>[IPS] :: Attack Console</title>""" + SHARED + """
@@ -537,11 +572,15 @@ def login_page():
     <div class="cs-title">::: PAYLOAD LIBRARY :::</div>
     <div class="attacks">
       <div class="atk" onclick="fill('1 OR 1=1')"><div class="atk-icon">&#128137;</div><div style="flex:1"><div class="atk-name">SQL INJECTION</div><div class="atk-payload">1 OR 1=1</div></div><div class="atk-hint">USE</div></div>
-      <div class="atk" onclick="fill('<script>alert(1)<\/script>')"><div class="atk-icon">&#128221;</div><div style="flex:1"><div class="atk-name">XSS ATTACK</div><div class="atk-payload">&lt;script&gt;alert(1)&lt;/script&gt;</div></div><div class="atk-hint">USE</div></div>
-      <div class="atk" onclick="fill('; ls')"><div class="atk-icon">&#128187;</div><div style="flex:1"><div class="atk-name">CMD INJECTION</div><div class="atk-payload">; ls</div></div><div class="atk-hint">USE</div></div>
-      <div class="atk" onclick="fill('../../etc/passwd')"><div class="atk-icon">&#128194;</div><div style="flex:1"><div class="atk-name">PATH TRAVERSAL</div><div class="atk-payload">../../etc/passwd</div></div><div class="atk-hint">USE</div></div>
       <div class="atk" onclick="fill('1 UNION SELECT username,password FROM users--')"><div class="atk-icon">&#128450;&#65039;</div><div style="flex:1"><div class="atk-name">UNION SELECT</div><div class="atk-payload">1 UNION SELECT username,password FROM users--</div></div><div class="atk-hint">USE</div></div>
       <div class="atk" onclick="fill('1; DROP TABLE users--')"><div class="atk-icon">&#128163;</div><div style="flex:1"><div class="atk-name">DROP TABLE</div><div class="atk-payload">1; DROP TABLE users--</div></div><div class="atk-hint">USE</div></div>
+      <div class="atk" onclick="fill('<script>alert(1)<\/script>')"><div class="atk-icon">&#128221;</div><div style="flex:1"><div class="atk-name">XSS ATTACK</div><div class="atk-payload">&lt;script&gt;alert(1)&lt;/script&gt;</div></div><div class="atk-hint">USE</div></div>
+      <div class="atk" onclick="fill('<img src=x onerror=alert(1)>')"><div class="atk-icon">&#128247;</div><div style="flex:1"><div class="atk-name">XSS IMG INJECT</div><div class="atk-payload">&lt;img src=x onerror=alert(1)&gt;</div></div><div class="atk-hint">USE</div></div>
+      <div class="atk" onclick="fill('; ls')"><div class="atk-icon">&#128187;</div><div style="flex:1"><div class="atk-name">CMD INJECTION</div><div class="atk-payload">; ls</div></div><div class="atk-hint">USE</div></div>
+      <div class="atk" onclick="fill('; cat /etc/passwd')"><div class="atk-icon">&#128272;</div><div style="flex:1"><div class="atk-name">CMD — READ FILE</div><div class="atk-payload">; cat /etc/passwd</div></div><div class="atk-hint">USE</div></div>
+      <div class="atk" onclick="fill('../../etc/passwd')"><div class="atk-icon">&#128194;</div><div style="flex:1"><div class="atk-name">PATH TRAVERSAL</div><div class="atk-payload">../../etc/passwd</div></div><div class="atk-hint">USE</div></div>
+      <div class="atk" onclick="fill('*)(cn=*')"><div class="atk-icon">&#128100;</div><div style="flex:1"><div class="atk-name">LDAP INJECTION</div><div class="atk-payload">*)(cn=*</div></div><div class="atk-hint">USE</div></div>
+      <div class="atk" onclick="fill('system(id)')"><div class="atk-icon">&#128165;</div><div style="flex:1"><div class="atk-name">RCE ATTEMPT</div><div class="atk-payload">system(id)</div></div><div class="atk-hint">USE</div></div>
     </div>
   </div>
   <div class="card">
@@ -819,13 +858,17 @@ def simulate():
   <div class="panel-title">SELECT ATTACK</div>
   <div class="sim-grid">
     <button class="atk-btn sql" onclick="fire('1 OR 1=1','SQL Injection','CRITICAL')"><div class="atk-icon">&#128137;</div><div style="flex:1"><div class="atk-name">SQL INJECTION</div><div class="atk-desc">Payload: 1 OR 1=1</div></div><div class="atk-sev sev-CRITICAL">CRITICAL</div></button>
+    <button class="atk-btn sql" onclick="fire('1 UNION SELECT username,password FROM users--','UNION SELECT','CRITICAL')"><div class="atk-icon">&#128450;&#65039;</div><div style="flex:1"><div class="atk-name">UNION SELECT</div><div class="atk-desc">Dump database credentials</div></div><div class="atk-sev sev-CRITICAL">CRITICAL</div></button>
+    <button class="atk-btn drop" onclick="fire('1; DROP TABLE users--','DROP TABLE','CRITICAL')"><div class="atk-icon">&#128163;</div><div style="flex:1"><div class="atk-name">DROP TABLE</div><div class="atk-desc">Destroy database tables</div></div><div class="atk-sev sev-CRITICAL">CRITICAL</div></button>
     <button class="atk-btn xss" onclick="fire('<script>alert(1)<\/script>','XSS Attack','HIGH')"><div class="atk-icon">&#128221;</div><div style="flex:1"><div class="atk-name">XSS ATTACK</div><div class="atk-desc">Payload: &lt;script&gt;alert(1)&lt;/script&gt;</div></div><div class="atk-sev sev-HIGH">HIGH</div></button>
+    <button class="atk-btn xss" onclick="fire('<img src=x onerror=alert(1)>','XSS IMG Inject','HIGH')"><div class="atk-icon">&#128247;</div><div style="flex:1"><div class="atk-name">XSS IMG INJECT</div><div class="atk-desc">Image tag onerror exploit</div></div><div class="atk-sev sev-HIGH">HIGH</div></button>
     <button class="atk-btn cmd" onclick="fire('; ls','Command Injection','CRITICAL')"><div class="atk-icon">&#128187;</div><div style="flex:1"><div class="atk-name">CMD INJECTION</div><div class="atk-desc">Payload: ; ls</div></div><div class="atk-sev sev-CRITICAL">CRITICAL</div></button>
+    <button class="atk-btn cmd" onclick="fire('; cat /etc/passwd','CMD Read File','CRITICAL')"><div class="atk-icon">&#128272;</div><div style="flex:1"><div class="atk-name">CMD READ FILE</div><div class="atk-desc">Read system password file</div></div><div class="atk-sev sev-CRITICAL">CRITICAL</div></button>
     <button class="atk-btn path" onclick="fire('../../etc/passwd','Path Traversal','HIGH')"><div class="atk-icon">&#128194;</div><div style="flex:1"><div class="atk-name">PATH TRAVERSAL</div><div class="atk-desc">Payload: ../../etc/passwd</div></div><div class="atk-sev sev-HIGH">HIGH</div></button>
     <button class="atk-btn brute" onclick="fireBrute()"><div class="atk-icon">&#128272;</div><div style="flex:1"><div class="atk-name">BRUTE FORCE</div><div class="atk-desc">Fires 6 rapid login attempts</div></div><div class="atk-sev sev-HIGH">HIGH</div></button>
     <button class="atk-btn honey" onclick="fireHoney()"><div class="atk-icon">&#127855;</div><div style="flex:1"><div class="atk-name">HONEYPOT TRAP</div><div class="atk-desc">Access /admin decoy path</div></div><div class="atk-sev sev-CRITICAL">CRITICAL</div></button>
-    <button class="atk-btn sql" onclick="fire('1 UNION SELECT username,password FROM users--','UNION SELECT','CRITICAL')"><div class="atk-icon">&#128450;&#65039;</div><div style="flex:1"><div class="atk-name">UNION SELECT</div><div class="atk-desc">Dump database credentials</div></div><div class="atk-sev sev-CRITICAL">CRITICAL</div></button>
-    <button class="atk-btn drop" onclick="fire('1; DROP TABLE users--','DROP TABLE','CRITICAL')"><div class="atk-icon">&#128163;</div><div style="flex:1"><div class="atk-name">DROP TABLE</div><div class="atk-desc">Destroy database tables</div></div><div class="atk-sev sev-CRITICAL">CRITICAL</div></button>
+    <button class="atk-btn sql" onclick="fire('*)(cn=*','LDAP Injection','HIGH')"><div class="atk-icon">&#128100;</div><div style="flex:1"><div class="atk-name">LDAP INJECTION</div><div class="atk-desc">Directory service exploit</div></div><div class="atk-sev sev-HIGH">HIGH</div></button>
+    <button class="atk-btn drop" onclick="fire('system(id)','RCE Attempt','CRITICAL')"><div class="atk-icon">&#128165;</div><div style="flex:1"><div class="atk-name">RCE ATTEMPT</div><div class="atk-desc">Remote code execution probe</div></div><div class="atk-sev sev-CRITICAL">CRITICAL</div></button>
   </div>
   <button class="fire-btn" onclick="fireAll()">[ &#9889; FIRE ALL ATTACKS ]</button>
   <div class="prog" id="prog"><div class="prog-fill" id="fill"></div></div>
@@ -866,11 +909,15 @@ async function fireAll(){
   t.innerHTML='';p.style.display='block';f.style.width='0%';
   var attacks=[
     {p:'1 OR 1=1',l:'SQL Injection'},
-    {p:'<script>alert(1)<\/script>',l:'XSS Attack'},
-    {p:'; ls',l:'Command Injection'},
-    {p:'../../etc/passwd',l:'Path Traversal'},
     {p:'1 UNION SELECT username,password FROM users--',l:'UNION SELECT'},
     {p:'1; DROP TABLE users--',l:'DROP TABLE'},
+    {p:'<script>alert(1)<\/script>',l:'XSS Attack'},
+    {p:'<img src=x onerror=alert(1)>',l:'XSS IMG Inject'},
+    {p:'; ls',l:'Command Injection'},
+    {p:'; cat /etc/passwd',l:'CMD Read File'},
+    {p:'../../etc/passwd',l:'Path Traversal'},
+    {p:'*)(cn=*',l:'LDAP Injection'},
+    {p:'system(id)',l:'RCE Attempt'},
     {honey:true,l:'Honeypot Trigger'},
   ];
   log('> [LAUNCH] Clearing blocked IPs for full test...','r-info');
@@ -1330,7 +1377,144 @@ def honeypots():
 # ── REPORT PAGE ───────────────────────────────────────────────────────────────
 @app.route('/report')
 def report():
-    return redirect('/dashboard')
+    logs = load_logs()
+    blocked_ips, attack_count = load_blocked()
+    total = len(logs)
+    sql   = sum(1 for l in logs if 'SQL'      in l.get('attack_type',''))
+    xss   = sum(1 for l in logs if 'XSS'      in l.get('attack_type',''))
+    cmd   = sum(1 for l in logs if 'CMD'      in l.get('attack_type','') or 'Command' in l.get('attack_type',''))
+    path  = sum(1 for l in logs if 'PATH'     in l.get('attack_type','') or 'Path'    in l.get('attack_type',''))
+    ldap  = sum(1 for l in logs if 'LDAP'     in l.get('attack_type',''))
+    rce   = sum(1 for l in logs if 'RCE'      in l.get('attack_type',''))
+    honey = sum(1 for l in logs if 'Honeypot' in l.get('attack_type','') or 'HONEY' in l.get('attack_type',''))
+    brute = sum(1 for l in logs if 'Brute'    in l.get('attack_type','') or 'BRUTE' in l.get('attack_type',''))
+    other = total - sql - xss - cmd - path - ldap - rce - honey - brute
+    sev_c = sum(1 for l in logs if l.get('severity') == 'CRITICAL')
+    sev_h = sum(1 for l in logs if l.get('severity') == 'HIGH')
+    from datetime import datetime as _dt
+    now_str = _dt.now().strftime('%Y-%m-%d %H:%M:%S UTC')
+    rows = ''
+    for i, l in enumerate(reversed(logs[-50:]), 1):
+        atype = l.get('attack_type', '?')
+        badge = 'b-sql' if 'SQL' in atype else 'b-xss' if 'XSS' in atype else 'b-cmd' if ('CMD' in atype or 'Command' in atype) else 'b-path' if ('PATH' in atype or 'Path' in atype) else 'b-honey' if 'Honeypot' in atype else 'b-brute' if 'Brute' in atype else 'b-unk'
+        sev = l.get('severity', 'HIGH')
+        rows += f'<tr><td class="td-mono">{i}</td><td class="td-mono">{l.get("time","?")}</td><td class="td-ip">{l.get("ip","?")}</td><td><span class="badge {badge}">{atype}</span></td><td><span class="sev-b sev-{sev}">{sev}</span></td><td class="td-payload" title="{l.get("payload","")}">{str(l.get("payload",""))[:40]}</td></tr>'
+    return render_template_string("""<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>[IPS] :: Threat Report</title>""" + SHARED + """
+<style>
+.rep-header{background:linear-gradient(135deg,var(--bg3),var(--panel));border:1px solid var(--border);border-radius:4px;padding:32px 36px;margin-bottom:18px;position:relative;overflow:hidden;}
+.rep-header::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--red),var(--amber),var(--g));}
+.rep-title{font-family:'Orbitron',monospace;font-size:22px;font-weight:900;letter-spacing:3px;margin-bottom:4px;text-shadow:0 0 20px rgba(0,255,65,0.4);}
+.rep-sub{font-size:9px;color:var(--dim);letter-spacing:2px;margin-bottom:16px;}
+.rep-meta{display:flex;gap:24px;flex-wrap:wrap;}
+.rep-meta-item{font-size:9px;color:var(--g3);letter-spacing:1px;}
+.rep-meta-item span{color:var(--g);}
+.section-title{font-family:'Orbitron',monospace;font-size:10px;font-weight:700;color:var(--g);letter-spacing:3px;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+.threat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;}
+.threat-card{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:16px;text-align:center;position:relative;overflow:hidden;}
+.threat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;}
+.tc-sql::before{background:var(--red);}
+.tc-xss::before{background:var(--amber);}
+.tc-cmd::before{background:var(--cyan);}
+.tc-path::before{background:var(--orange);}
+.tc-honey::before{background:var(--violet);}
+.tc-ldap::before{background:var(--g);}
+.tc-rce::before{background:var(--red);}
+.tc-other::before{background:var(--g3);}
+.tc-num{font-family:'Orbitron',monospace;font-size:32px;font-weight:900;line-height:1;margin-bottom:4px;}
+.tc-lbl{font-size:7px;color:var(--g3);letter-spacing:2px;text-transform:uppercase;}
+.tc-sql .tc-num{color:var(--red);}
+.tc-xss .tc-num{color:var(--amber);}
+.tc-cmd .tc-num{color:var(--cyan);}
+.tc-path .tc-num{color:var(--orange);}
+.tc-honey .tc-num,.tc-ldap .tc-num{color:var(--violet);}
+.tc-rce .tc-num{color:var(--red);}
+.status-row{display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap;}
+.status-pill{padding:8px 18px;border-radius:20px;font-size:9px;letter-spacing:2px;border:1px solid;}
+.sp-online{color:var(--g);border-color:rgba(0,255,65,0.4);background:rgba(0,255,65,0.06);}
+.sp-block{color:var(--red);border-color:rgba(255,0,64,0.4);background:rgba(255,0,64,0.06);}
+.sp-log{color:var(--amber);border-color:rgba(255,170,0,0.4);background:rgba(255,170,0,0.06);}
+.bar-wrap{margin-bottom:10px;}
+.bar-label{display:flex;justify-content:space-between;font-size:9px;color:var(--dim);margin-bottom:4px;}
+.bar-track{height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;}
+.bar-fill{height:100%;border-radius:3px;transition:width 1s ease;}
+.print-btn{background:transparent;border:1px solid var(--g);color:var(--g);padding:9px 20px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:2px;cursor:pointer;border-radius:3px;transition:all 0.2s;}
+.print-btn:hover{background:rgba(0,255,65,0.08);}
+</style>
+</head><body>""" + nav('/report') + """
+<main>
+<div class="rep-header" style="opacity:0;animation:fadeUp 0.5s ease 0.1s forwards;">
+  <div class="rep-title">&#128202; THREAT INTELLIGENCE REPORT</div>
+  <div class="rep-sub">WEB APPLICATION INTRUSION PREVENTION SYSTEM — LIVE ANALYSIS</div>
+  <div class="rep-meta">
+    <div class="rep-meta-item">GENERATED: <span>""" + now_str + """</span></div>
+    <div class="rep-meta-item">TOTAL EVENTS: <span>""" + str(total) + """</span></div>
+    <div class="rep-meta-item">IPS BLOCKED: <span>""" + str(len(blocked_ips)) + """</span></div>
+    <div class="rep-meta-item">STATUS: <span style="color:var(--g);">&#9679; ACTIVE</span></div>
+  </div>
+</div>
+
+<div style="opacity:0;animation:fadeUp 0.4s ease 0.15s forwards;">
+  <div class="section-title">::: SYSTEM STATUS :::</div>
+  <div class="status-row">
+    <div class="status-pill sp-online">&#9679; WAF ONLINE</div>
+    <div class="status-pill sp-block">&#128683; """ + str(len(blocked_ips)) + """ IPS BLOCKED</div>
+    <div class="status-pill sp-log">&#128203; """ + str(total) + """ EVENTS LOGGED</div>
+    <div class="status-pill sp-online">&#9989; 100% BLOCK RATE</div>
+  </div>
+</div>
+
+<div class="stat-row stat-4" style="animation-delay:0.2s;">
+  <div class="stat s-r"><div class="stat-n">""" + str(total) + """</div><div class="stat-l">Total Attacks</div></div>
+  <div class="stat s-a"><div class="stat-n">""" + str(len(blocked_ips)) + """</div><div class="stat-l">IPs Blocked</div></div>
+  <div class="stat s-c"><div class="stat-n">""" + str(sev_c) + """</div><div class="stat-l">Critical Severity</div></div>
+  <div class="stat s-g"><div class="stat-n">""" + str(sev_h) + """</div><div class="stat-l">High Severity</div></div>
+</div>
+
+<div class="panel" style="animation-delay:0.25s;">
+  <div class="section-title">::: ATTACK BREAKDOWN BY TYPE :::</div>
+  <div class="threat-grid">
+    <div class="threat-card tc-sql"><div class="tc-num">""" + str(sql) + """</div><div class="tc-lbl">SQL Injection</div></div>
+    <div class="threat-card tc-xss"><div class="tc-num">""" + str(xss) + """</div><div class="tc-lbl">XSS Attack</div></div>
+    <div class="threat-card tc-cmd"><div class="tc-num">""" + str(cmd) + """</div><div class="tc-lbl">CMD Injection</div></div>
+    <div class="threat-card tc-path"><div class="tc-num">""" + str(path) + """</div><div class="tc-lbl">Path Traversal</div></div>
+    <div class="threat-card tc-honey"><div class="tc-num">""" + str(honey) + """</div><div class="tc-lbl">Honeypot</div></div>
+    <div class="threat-card tc-ldap"><div class="tc-num">""" + str(ldap) + """</div><div class="tc-lbl">LDAP Injection</div></div>
+    <div class="threat-card tc-rce"><div class="tc-num">""" + str(rce) + """</div><div class="tc-lbl">RCE Attempt</div></div>
+    <div class="threat-card tc-other"><div class="tc-num">""" + str(max(0,other)) + """</div><div class="tc-lbl">Other</div></div>
+  </div>
+
+  <div class="section-title" style="margin-top:8px;">::: THREAT DISTRIBUTION :::</div>
+  """ + (f'''
+  <div class="bar-wrap"><div class="bar-label"><span>SQL Injection</span><span>{sql}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(sql/max(total,1)*100))}%;background:var(--red);"></div></div></div>
+  <div class="bar-wrap"><div class="bar-label"><span>XSS Attack</span><span>{xss}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(xss/max(total,1)*100))}%;background:var(--amber);"></div></div></div>
+  <div class="bar-wrap"><div class="bar-label"><span>CMD Injection</span><span>{cmd}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(cmd/max(total,1)*100))}%;background:var(--cyan);"></div></div></div>
+  <div class="bar-wrap"><div class="bar-label"><span>Path Traversal</span><span>{path}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(path/max(total,1)*100))}%;background:var(--orange);"></div></div></div>
+  <div class="bar-wrap"><div class="bar-label"><span>Honeypot</span><span>{honey}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(honey/max(total,1)*100))}%;background:var(--violet);"></div></div></div>
+  <div class="bar-wrap"><div class="bar-label"><span>LDAP Injection</span><span>{ldap}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(ldap/max(total,1)*100))}%;background:var(--g);"></div></div></div>
+  <div class="bar-wrap"><div class="bar-label"><span>RCE Attempt</span><span>{rce}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(rce/max(total,1)*100))}%;background:var(--red);"></div></div></div>
+  ''' if total > 0 else '<div style="color:var(--dim);font-size:10px;padding:20px 0;">No attacks logged yet. Use the simulator to generate data.</div>') + """
+</div>
+
+<div class="panel" style="animation-delay:0.3s;padding:0;overflow:hidden;">
+  <div style="padding:16px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+    <div class="section-title" style="margin-bottom:0;">::: RECENT ATTACK LOG (LAST 50) :::</div>
+    <button class="print-btn" onclick="window.print()">&#128438; PRINT REPORT</button>
+  </div>
+  """ + (f'''<table>
+    <thead><tr><th>#</th><th>TIMESTAMP</th><th>SOURCE IP</th><th>ATTACK TYPE</th><th>SEVERITY</th><th>PAYLOAD</th></tr></thead>
+    <tbody>{rows}</tbody>
+  </table>''' if total > 0 else '<div style="padding:30px;color:var(--dim);font-size:10px;text-align:center;">No attacks logged yet — run the simulator to generate entries.</div>') + """
+</div>
+
+<div style="text-align:center;padding:20px 0 40px;opacity:0;animation:fadeUp 0.4s ease 0.4s forwards;">
+  <a href="/simulate" class="btn btn-r" style="margin-right:10px;">&#9889; RUN SIMULATOR</a>
+  <a href="/dashboard" class="btn btn-c" style="margin-right:10px;">&#128202; LIVE DASHBOARD</a>
+  <a href="/admin" class="btn btn-a">&#128274; ADMIN PANEL</a>
+</div>
+</main>
+</body></html>""")
 
 
 # ── ADMIN PAGE ────────────────────────────────────────────────────────────────
