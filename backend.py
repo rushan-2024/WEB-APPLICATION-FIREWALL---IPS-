@@ -12,7 +12,7 @@ Routes:
   /admin      → Admin panel (password protected)
   /report     → Live report page
 """
-from flask import Flask, request, render_template_string, redirect, session
+from flask import Flask, request, render_template_string, redirect, session, send_file
 import sqlite3, json, os
 from datetime import datetime
 from collections import Counter
@@ -1778,6 +1778,79 @@ def download_pdf():
         download_name=f'waf_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf'
     )
 
+
+
+
+# ── HONEYPOT TRAP ROUTES ──────────────────────────────────────────────────────
+HONEYPOT_PATHS = [
+    '/.env', '/config.php', '/.git/config', '/wp-config.php',
+    '/database.yml', '/secrets.json', '/passwords.txt', '/backup.sql',
+    '/api-keys.txt', '/credentials.xml', '/.htpasswd', '/web.config',
+    '/admin', '/wp-admin', '/administrator', '/panel', '/cpanel', '/manage',
+    '/secret-admin', '/hidden', '/backup', '/staging', '/internal', '/vault',
+    '/shell', '/cmd.php', '/terminal', '/bash', '/execute', '/remote-access',
+    '/phpmyadmin', '/mysql', '/jenkins', '/solr', '/actuator', '/jboss',
+]
+
+def log_honeypot(path):
+    ip  = request.remote_addr
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    blocked, ac = load_blocked()
+    ac[ip] = ac.get(ip, 0) + 1
+    if ac[ip] >= 3:
+        blocked.add(ip)
+    save_blocked(blocked, ac)
+    entry = json.dumps({
+        'time': now, 'attack_type': 'HONEYPOT',
+        'ip': ip, 'payload': path,
+        'severity': 'CRITICAL', 'country': 'Unknown'
+    })
+    with open(LOG_FILE, 'a') as f:
+        f.write(entry + '\n')
+
+@app.route('/.env')
+@app.route('/config.php')
+@app.route('/.git/config')
+@app.route('/wp-config.php')
+@app.route('/database.yml')
+@app.route('/secrets.json')
+@app.route('/passwords.txt')
+@app.route('/backup.sql')
+@app.route('/api-keys.txt')
+@app.route('/credentials.xml')
+@app.route('/.htpasswd')
+@app.route('/web.config')
+@app.route('/wp-admin')
+@app.route('/administrator')
+@app.route('/panel')
+@app.route('/cpanel')
+@app.route('/manage')
+@app.route('/secret-admin')
+@app.route('/hidden')
+@app.route('/staging')
+@app.route('/internal')
+@app.route('/vault')
+@app.route('/shell')
+@app.route('/cmd.php')
+@app.route('/terminal')
+@app.route('/bash')
+@app.route('/execute')
+@app.route('/remote-access')
+@app.route('/phpmyadmin')
+@app.route('/mysql')
+@app.route('/jenkins')
+@app.route('/solr')
+@app.route('/actuator')
+@app.route('/jboss')
+def honeypot_trap():
+    path = request.path
+    log_honeypot(path)
+    return render_template_string("""<!DOCTYPE html><html><head>
+<meta charset="UTF-8"><title>404 Not Found</title>
+<style>body{font-family:monospace;background:#050a05;color:#00ff41;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;}
+.box{text-align:center;border:1px solid rgba(0,255,65,0.2);padding:40px 60px;background:#0c160c;}
+h1{font-size:48px;color:#ff0040;margin:0 0 10px;}p{color:rgba(0,255,65,0.5);font-size:12px;}</style>
+</head><body><div class="box"><h1>404</h1><p>NOT FOUND</p><p style="margin-top:20px;font-size:10px;color:rgba(255,0,64,0.4);">[HONEYPOT] Your IP has been logged and flagged.</p></div></body></html>"""), 404
 
 
 # ── ADMIN PAGE ────────────────────────────────────────────────────────────────
