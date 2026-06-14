@@ -505,8 +505,18 @@ def login_page():
             if ac[ip] >= 3:
                 blocked.add(ip)
             save_blocked(blocked, ac)
+            sev_map = {
+                'SQL_INJECTION': 'CRITICAL', 'XSS': 'HIGH', 'CMD_INJECTION': 'CRITICAL',
+                'PATH_TRAVERSAL': 'HIGH', 'LDAP_INJECTION': 'HIGH', 'RCE': 'CRITICAL',
+                'XXE': 'HIGH', 'BRUTE_FORCE': 'HIGH',
+            }
+            log_entry = json.dumps({
+                'time': now, 'attack_type': attack_type, 'ip': ip,
+                'payload': user[:80], 'severity': sev_map.get(attack_type, 'HIGH'),
+                'country': 'Unknown'
+            })
             with open(LOG_FILE, 'a') as lf:
-                lf.write(f"{now} | {attack_type} | {ip} | {user[:80]}\n")
+                lf.write(log_entry + '\n')
             result = f'[BLOCKED] {attack_type} detected — payload rejected by WAF'
             result_type = 'error'
         else:
@@ -613,13 +623,15 @@ def dashboard():
     logs = load_logs()
     blocked_ips, _ = load_blocked()
     total = len(logs)
-    sql   = sum(1 for l in logs if 'SQL'      in l.get('attack_type',''))
-    xss   = sum(1 for l in logs if 'XSS'      in l.get('attack_type',''))
-    cmd   = sum(1 for l in logs if 'Command'  in l.get('attack_type',''))
-    path  = sum(1 for l in logs if 'Path'     in l.get('attack_type',''))
-    honey = sum(1 for l in logs if 'Honeypot' in l.get('attack_type',''))
-    brute = sum(1 for l in logs if 'Brute'    in l.get('attack_type',''))
-    other = total - sql - xss - cmd - path - honey - brute
+    sql   = sum(1 for l in logs if 'SQL'     in l.get('attack_type','').upper())
+    xss   = sum(1 for l in logs if 'XSS'     in l.get('attack_type','').upper())
+    cmd   = sum(1 for l in logs if 'CMD'     in l.get('attack_type','').upper() or 'COMMAND' in l.get('attack_type','').upper())
+    path  = sum(1 for l in logs if 'PATH'    in l.get('attack_type','').upper())
+    honey = sum(1 for l in logs if 'HONEY'   in l.get('attack_type','').upper())
+    brute = sum(1 for l in logs if 'BRUTE'   in l.get('attack_type','').upper())
+    ldap  = sum(1 for l in logs if 'LDAP'    in l.get('attack_type','').upper())
+    rce   = sum(1 for l in logs if 'RCE'     in l.get('attack_type','').upper())
+    other = max(0, total - sql - xss - cmd - path - honey - brute - ldap - rce)
     sev_c = sum(1 for l in logs if l.get('severity')=='CRITICAL')
     sev_h = sum(1 for l in logs if l.get('severity')=='HIGH')
     sev_m = sum(1 for l in logs if l.get('severity')=='MEDIUM')
@@ -732,11 +744,13 @@ def dashboard():
         <td>{% set t=l.get('attack_type','') %}
           {% if 'SQL' in t %}<span class="badge b-sql">SQL</span>
           {% elif 'XSS' in t %}<span class="badge b-xss">XSS</span>
-          {% elif 'Command' in t %}<span class="badge b-cmd">CMD</span>
-          {% elif 'Path' in t %}<span class="badge b-path">PATH</span>
-          {% elif 'Honeypot' in t %}<span class="badge b-honey">HONEY</span>
-          {% elif 'Brute' in t %}<span class="badge b-brute">BRUTE</span>
-          {% else %}<span class="badge b-unk">???</span>{% endif %}
+          {% elif 'CMD' in t or 'Command' in t %}<span class="badge b-cmd">CMD</span>
+          {% elif 'PATH' in t or 'Path' in t %}<span class="badge b-path">PATH</span>
+          {% elif 'HONEY' in t or 'Honeypot' in t %}<span class="badge b-honey">HONEY</span>
+          {% elif 'BRUTE' in t or 'Brute' in t %}<span class="badge b-brute">BRUTE</span>
+          {% elif 'LDAP' in t %}<span class="badge b-sql">LDAP</span>
+          {% elif 'RCE' in t %}<span class="badge b-sql">RCE</span>
+          {% else %}<span class="badge b-unk">{{ t or '???' }}</span>{% endif %}
         </td>
         <td><span class="sev-b sev-{{ l.get('severity','LOW') }}">{{ l.get('severity','LOW') }}</span></td>
         <td class="td-payload" title="{{ l.payload }}">{{ l.payload }}</td>
@@ -757,14 +771,14 @@ Chart.defaults.color='rgba(0,255,65,0.4)';
 Chart.defaults.borderColor='rgba(0,255,65,0.08)';
 Chart.defaults.font.family="'Share Tech Mono',monospace";
 Chart.defaults.font.size=9;
-var typeData = [{{ sql }},{{ xss }},{{ cmd }},{{ path }},{{ honey }},{{ brute }},{{ other }}];
+var typeData = [{{ sql }},{{ xss }},{{ cmd }},{{ path }},{{ honey }},{{ brute }},{{ ldap }},{{ rce }},{{ other }}];
 var ipLabels = {{ ip_labels|tojson }};
 var ipData   = {{ ip_counts|tojson }};
 new Chart(document.getElementById('typeC'),{type:'doughnut',data:{
-  labels:['SQL','XSS','CMD','PATH','HONEYPOT','BRUTE','OTHER'],
+  labels:['SQL','XSS','CMD','PATH','HONEYPOT','BRUTE','LDAP','RCE','OTHER'],
   datasets:[{data:typeData,
-    backgroundColor:['rgba(255,0,64,0.15)','rgba(255,170,0,0.15)','rgba(0,255,255,0.15)','rgba(255,136,0,0.15)','rgba(255,170,0,0.2)','rgba(168,85,247,0.15)','rgba(0,255,65,0.08)'],
-    borderColor:['#ff0040','#ffaa00','#00ffff','#ff8800','#ffaa00','#a855f7','#00ff41'],borderWidth:1}]},
+    backgroundColor:['rgba(255,0,64,0.15)','rgba(255,170,0,0.15)','rgba(0,255,255,0.15)','rgba(255,136,0,0.15)','rgba(255,170,0,0.2)','rgba(168,85,247,0.15)','rgba(0,255,65,0.12)','rgba(255,0,64,0.2)','rgba(0,255,65,0.08)'],
+    borderColor:['#ff0040','#ffaa00','#00ffff','#ff8800','#ffaa00','#a855f7','#00ff41','#ff0040','#00ff41'],borderWidth:1}]},
   options:{responsive:true,maintainAspectRatio:false,cutout:'65%',plugins:{legend:{position:'right',labels:{padding:10,boxWidth:7,boxHeight:7,usePointStyle:true}}}}
 });
 new Chart(document.getElementById('ipC'),{type:'bar',data:{
@@ -776,7 +790,7 @@ new Chart(document.getElementById('ipC'),{type:'bar',data:{
 </script>
 </body></html>""",
         logs=logs, total=total, sql=sql, xss=xss, cmd=cmd, path=path,
-        honey=honey, brute=brute, other=other,
+        honey=honey, brute=brute, ldap=ldap, rce=rce, other=other,
         sev_c=sev_c, sev_h=sev_h, sev_m=sev_m, sev_l=sev_l,
         geo=geo, honeypot_logs=honeypot_logs,
         blocked=len(blocked_ips),
@@ -1377,144 +1391,393 @@ def honeypots():
 # ── REPORT PAGE ───────────────────────────────────────────────────────────────
 @app.route('/report')
 def report():
-    logs = load_logs()
-    blocked_ips, attack_count = load_blocked()
-    total = len(logs)
-    sql   = sum(1 for l in logs if 'SQL'      in l.get('attack_type',''))
-    xss   = sum(1 for l in logs if 'XSS'      in l.get('attack_type',''))
-    cmd   = sum(1 for l in logs if 'CMD'      in l.get('attack_type','') or 'Command' in l.get('attack_type',''))
-    path  = sum(1 for l in logs if 'PATH'     in l.get('attack_type','') or 'Path'    in l.get('attack_type',''))
-    ldap  = sum(1 for l in logs if 'LDAP'     in l.get('attack_type',''))
-    rce   = sum(1 for l in logs if 'RCE'      in l.get('attack_type',''))
-    honey = sum(1 for l in logs if 'Honeypot' in l.get('attack_type','') or 'HONEY' in l.get('attack_type',''))
-    brute = sum(1 for l in logs if 'Brute'    in l.get('attack_type','') or 'BRUTE' in l.get('attack_type',''))
-    other = total - sql - xss - cmd - path - ldap - rce - honey - brute
-    sev_c = sum(1 for l in logs if l.get('severity') == 'CRITICAL')
-    sev_h = sum(1 for l in logs if l.get('severity') == 'HIGH')
-    from datetime import datetime as _dt
-    now_str = _dt.now().strftime('%Y-%m-%d %H:%M:%S UTC')
-    rows = ''
-    for i, l in enumerate(reversed(logs[-50:]), 1):
-        atype = l.get('attack_type', '?')
-        badge = 'b-sql' if 'SQL' in atype else 'b-xss' if 'XSS' in atype else 'b-cmd' if ('CMD' in atype or 'Command' in atype) else 'b-path' if ('PATH' in atype or 'Path' in atype) else 'b-honey' if 'Honeypot' in atype else 'b-brute' if 'Brute' in atype else 'b-unk'
-        sev = l.get('severity', 'HIGH')
-        rows += f'<tr><td class="td-mono">{i}</td><td class="td-mono">{l.get("time","?")}</td><td class="td-ip">{l.get("ip","?")}</td><td><span class="badge {badge}">{atype}</span></td><td><span class="sev-b sev-{sev}">{sev}</span></td><td class="td-payload" title="{l.get("payload","")}">{str(l.get("payload",""))[:40]}</td></tr>'
-    return render_template_string("""<!DOCTYPE html><html lang="en"><head>
+    from collections import Counter as _Counter
+    logs        = load_logs()
+    type_counts = _Counter(l.get('attack_type', 'Unknown') for l in logs)
+    ip_counts   = _Counter(l.get('ip', '?') for l in logs)
+    blocked, _  = load_blocked()
+    total       = len(logs)
+    gen_time    = datetime.now().strftime('%d %b %Y  %H:%M:%S')
+
+    # Build bars HTML
+    bars_type = ''
+    for atype, count in type_counts.most_common():
+        pct = round(count / total * 100, 1) if total > 0 else 0
+        if   'SQL'  in atype: clr = '#ff0040'
+        elif 'XSS'  in atype: clr = '#ffaa00'
+        elif 'CMD'  in atype or 'Command' in atype: clr = '#00ffff'
+        elif 'PATH' in atype or 'Path'    in atype: clr = '#ff8800'
+        elif 'LDAP' in atype: clr = '#a855f7'
+        elif 'RCE'  in atype: clr = '#ff0040'
+        elif 'Honey' in atype: clr = '#ffaa00'
+        else: clr = 'rgba(0,255,65,0.3)'
+        bars_type += (
+            f'<div class="bar-row">'
+            f'<div class="bar-label">{atype}</div>'
+            f'<div class="bar-track"><div class="bar-fill" style="width:{pct}%;background:{clr};"></div></div>'
+            f'<div class="bar-n">{count}</div>'
+            f'<div class="bar-p">{pct}%</div>'
+            f'</div>'
+        )
+    if not bars_type:
+        bars_type = '<div style="color:rgba(0,255,65,0.45);font-size:10px;padding:10px 0;">No attack data yet</div>'
+
+    bars_ip = ''
+    max_c = max(ip_counts.values()) if ip_counts else 1
+    for ip_addr, count in ip_counts.most_common(8):
+        pct  = round(count / max_c * 100, 1)
+        pct2 = round(count / total * 100, 1) if total > 0 else 0
+        bars_ip += (
+            f'<div class="bar-row">'
+            f'<div class="bar-label">{ip_addr}</div>'
+            f'<div class="bar-track"><div class="bar-fill" style="width:{pct}%;background:#00ffff;"></div></div>'
+            f'<div class="bar-n">{count}</div>'
+            f'<div class="bar-p">{pct2}%</div>'
+            f'</div>'
+        )
+    if not bars_ip:
+        bars_ip = '<div style="color:rgba(0,255,65,0.45);font-size:10px;padding:10px 0;">No IP data yet</div>'
+
+    # Build log table rows
+    log_rows = ''
+    for i, log in enumerate(reversed(logs), 1):
+        atype = log.get('attack_type', '')
+        if   'SQL'  in atype: badge_cls, badge_txt = 'b-sql', atype
+        elif 'XSS'  in atype: badge_cls, badge_txt = 'b-xss', 'XSS'
+        elif 'CMD'  in atype or 'Command' in atype: badge_cls, badge_txt = 'b-cmd', 'CMD'
+        elif 'PATH' in atype or 'Path'    in atype: badge_cls, badge_txt = 'b-path', 'PATH'
+        else:                                        badge_cls, badge_txt = 'b-unk',  atype or '???'
+        sev = log.get('severity', 'HIGH')
+        payload = str(log.get('payload', ''))[:50]
+        log_rows += (
+            f'<tr>'
+            f'<td class="td-m">{i}</td>'
+            f'<td class="td-m">{log.get("time","?")}</td>'
+            f'<td class="td-ip">{log.get("ip","?")}</td>'
+            f'<td><span class="badge {badge_cls}">{badge_txt}</span></td>'
+            f'<td><span class="sev-b sev-{sev}">{sev}</span></td>'
+            f'<td class="td-p">{payload}</td>'
+            f'<td><span class="badge b-block">BLOCKED</span></td>'
+            f'</tr>'
+        )
+
+    log_table = f'''<table>
+      <thead><tr><th>#</th><th>TIMESTAMP</th><th>IP ADDRESS</th><th>TYPE</th><th>SEVERITY</th><th>PAYLOAD</th><th>STATUS</th></tr></thead>
+      <tbody>{log_rows}</tbody>
+    </table>''' if logs else '<div class="empty">No attacks logged yet — send payloads from /login or /simulate</div>'
+
+    sql_c  = type_counts.get('SQL_INJECTION', 0) + type_counts.get('SQL Injection', 0)
+    xss_c  = type_counts.get('XSS', 0)
+    cmd_c  = type_counts.get('CMD_INJECTION', 0) + type_counts.get('Command Injection', 0)
+    path_c = type_counts.get('PATH_TRAVERSAL', 0) + type_counts.get('Path Traversal', 0)
+
+    html = f'''<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>[IPS] :: Threat Report</title>""" + SHARED + """
+<title>[IPS] :: Attack Report</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
 <style>
-.rep-header{background:linear-gradient(135deg,var(--bg3),var(--panel));border:1px solid var(--border);border-radius:4px;padding:32px 36px;margin-bottom:18px;position:relative;overflow:hidden;}
-.rep-header::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--red),var(--amber),var(--g));}
-.rep-title{font-family:'Orbitron',monospace;font-size:22px;font-weight:900;letter-spacing:3px;margin-bottom:4px;text-shadow:0 0 20px rgba(0,255,65,0.4);}
-.rep-sub{font-size:9px;color:var(--dim);letter-spacing:2px;margin-bottom:16px;}
-.rep-meta{display:flex;gap:24px;flex-wrap:wrap;}
-.rep-meta-item{font-size:9px;color:var(--g3);letter-spacing:1px;}
-.rep-meta-item span{color:var(--g);}
-.section-title{font-family:'Orbitron',monospace;font-size:10px;font-weight:700;color:var(--g);letter-spacing:3px;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--border);}
-.threat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;}
-.threat-card{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:16px;text-align:center;position:relative;overflow:hidden;}
-.threat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;}
-.tc-sql::before{background:var(--red);}
-.tc-xss::before{background:var(--amber);}
-.tc-cmd::before{background:var(--cyan);}
-.tc-path::before{background:var(--orange);}
-.tc-honey::before{background:var(--violet);}
-.tc-ldap::before{background:var(--g);}
-.tc-rce::before{background:var(--red);}
-.tc-other::before{background:var(--g3);}
-.tc-num{font-family:'Orbitron',monospace;font-size:32px;font-weight:900;line-height:1;margin-bottom:4px;}
-.tc-lbl{font-size:7px;color:var(--g3);letter-spacing:2px;text-transform:uppercase;}
-.tc-sql .tc-num{color:var(--red);}
-.tc-xss .tc-num{color:var(--amber);}
-.tc-cmd .tc-num{color:var(--cyan);}
-.tc-path .tc-num{color:var(--orange);}
-.tc-honey .tc-num,.tc-ldap .tc-num{color:var(--violet);}
-.tc-rce .tc-num{color:var(--red);}
-.status-row{display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap;}
-.status-pill{padding:8px 18px;border-radius:20px;font-size:9px;letter-spacing:2px;border:1px solid;}
-.sp-online{color:var(--g);border-color:rgba(0,255,65,0.4);background:rgba(0,255,65,0.06);}
-.sp-block{color:var(--red);border-color:rgba(255,0,64,0.4);background:rgba(255,0,64,0.06);}
-.sp-log{color:var(--amber);border-color:rgba(255,170,0,0.4);background:rgba(255,170,0,0.06);}
-.bar-wrap{margin-bottom:10px;}
-.bar-label{display:flex;justify-content:space-between;font-size:9px;color:var(--dim);margin-bottom:4px;}
-.bar-track{height:6px;background:var(--bg3);border-radius:3px;overflow:hidden;}
-.bar-fill{height:100%;border-radius:3px;transition:width 1s ease;}
-.print-btn{background:transparent;border:1px solid var(--g);color:var(--g);padding:9px 20px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:2px;cursor:pointer;border-radius:3px;transition:all 0.2s;}
-.print-btn:hover{background:rgba(0,255,65,0.08);}
+:root{{--bg:#050a05;--bg2:#070d07;--bg3:#0a120a;--panel:#0c160c;
+  --border:rgba(0,255,65,0.15);--border2:rgba(0,255,65,0.35);
+  --g:#00ff41;--g2:#00cc33;--g3:#008f23;--dim:rgba(0,255,65,0.45);
+  --red:#ff0040;--amber:#ffaa00;--cyan:#00ffff;--violet:#a855f7;--orange:#ff8800;--text:#c8ffc8;}}
+*,*::before,*::after{{margin:0;padding:0;box-sizing:border-box;}}
+body{{font-family:"Share Tech Mono",monospace;background:var(--bg);color:var(--g);min-height:100vh;overflow-x:hidden;}}
+#matrix{{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:0.1;}}
+body::after{{content:"";position:fixed;inset:0;z-index:999;pointer-events:none;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.07) 2px,rgba(0,0,0,0.07) 4px);}}
+body::before{{content:"";position:fixed;inset:0;z-index:998;pointer-events:none;background:radial-gradient(ellipse at center,transparent 60%,rgba(0,0,0,0.55) 100%);}}
+@keyframes glitch{{0%,100%{{text-shadow:none;transform:none;}}20%{{text-shadow:-2px 0 #ff0040,2px 0 #00ffff;transform:translate(-1px,0);}}40%{{text-shadow:2px 0 #ff0040,-2px 0 #00ffff;transform:translate(1px,0);}}60%{{text-shadow:none;transform:none;}}80%{{text-shadow:-1px 0 #00ffff;transform:translate(1px,0);}}}}
+@keyframes flicker{{0%,100%{{opacity:1}}42%{{opacity:0.6}}76%{{opacity:0.7}}}}
+@keyframes scanH{{0%{{top:-4px}}100%{{top:100%}}}}
+@keyframes fadeUp{{from{{opacity:0;transform:translateY(14px)}}to{{opacity:1;transform:translateY(0)}}}}
+.scan-line{{position:fixed;left:0;right:0;height:2px;z-index:997;pointer-events:none;background:linear-gradient(90deg,transparent,rgba(0,255,65,0.35),transparent);animation:scanH 8s linear infinite;}}
+nav{{position:sticky;top:0;z-index:200;display:flex;justify-content:space-between;align-items:center;padding:12px 40px;background:rgba(5,10,5,0.93);backdrop-filter:blur(14px);border-bottom:1px solid var(--border);animation:flicker 10s infinite;}}
+.logo{{font-family:"Orbitron",monospace;font-size:13px;font-weight:900;color:var(--g);letter-spacing:4px;text-shadow:0 0 20px var(--g);animation:glitch 7s infinite;text-decoration:none;}}
+.nav-links{{display:flex;gap:6px;align-items:center;}}
+.nav-link{{font-size:9px;color:var(--dim);text-decoration:none;letter-spacing:1.5px;padding:5px 10px;border:1px solid transparent;border-radius:2px;transition:all 0.2s;}}
+.nav-link:hover{{color:var(--g);border-color:var(--border);}}
+.nav-link.active{{color:var(--g);border-color:var(--border2);background:rgba(0,255,65,0.06);}}
+.nav-pdf{{color:var(--amber) !important;border-color:rgba(255,170,0,0.3) !important;}}
+main{{position:relative;z-index:1;max-width:1300px;margin:0 auto;padding:40px 44px 60px;}}
+.page-head{{margin-bottom:30px;opacity:0;animation:fadeUp 0.5s ease 0.1s forwards;}}
+.page-head h1{{font-family:"Orbitron",monospace;font-size:26px;font-weight:900;letter-spacing:2px;text-shadow:0 0 20px rgba(0,255,65,0.4);margin-bottom:4px;}}
+.page-head h1 span{{color:var(--amber);text-shadow:0 0 18px rgba(255,170,0,0.5);}}
+.page-head p{{font-size:10px;color:var(--dim);letter-spacing:1px;}}
+.refresh-row{{display:flex;align-items:center;gap:12px;margin-top:6px;}}
+.gen-t{{font-size:9px;color:var(--g3);letter-spacing:1px;}}
+.cd{{font-size:9px;color:var(--amber);border:1px solid rgba(255,170,0,0.3);padding:2px 10px;letter-spacing:1px;}}
+.stats{{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:18px;opacity:0;animation:fadeUp 0.4s ease 0.15s forwards;}}
+.stat{{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:18px 14px;text-align:center;position:relative;overflow:hidden;transition:all 0.2s;}}
+.stat:hover{{border-color:var(--border2);transform:translateY(-2px);}}
+.stat::before{{content:"";position:absolute;top:0;left:0;right:0;height:1px;}}
+.s-r::before{{background:linear-gradient(90deg,var(--red),transparent);}}
+.s-a::before{{background:linear-gradient(90deg,var(--amber),transparent);}}
+.s-v::before{{background:linear-gradient(90deg,var(--violet),transparent);}}
+.s-c::before{{background:linear-gradient(90deg,var(--cyan),transparent);}}
+.s-o::before{{background:linear-gradient(90deg,var(--orange),transparent);}}
+.s-g::before{{background:linear-gradient(90deg,var(--g),transparent);}}
+.stat-n{{font-family:"Orbitron",monospace;font-size:36px;font-weight:900;line-height:1;margin-bottom:5px;}}
+.s-r .stat-n{{color:var(--red);}} .s-a .stat-n{{color:var(--amber);}} .s-v .stat-n{{color:var(--violet);}}
+.s-c .stat-n{{color:var(--cyan);}} .s-o .stat-n{{color:var(--orange);}} .s-g .stat-n{{color:var(--g);}}
+.stat-l{{font-size:7px;color:var(--g3);letter-spacing:2px;text-transform:uppercase;}}
+.breakdown{{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;opacity:0;animation:fadeUp 0.4s ease 0.25s forwards;}}
+.card{{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:22px 24px;position:relative;overflow:hidden;}}
+.card::before{{content:"";position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--g),transparent);opacity:0.4;}}
+.card-title{{font-family:"Orbitron",monospace;font-size:10px;font-weight:700;color:var(--g);letter-spacing:2px;margin-bottom:3px;}}
+.card-sub{{font-size:8px;color:var(--g3);letter-spacing:1px;margin-bottom:18px;}}
+.bar-row{{display:flex;align-items:center;gap:8px;margin-bottom:9px;}}
+.bar-label{{font-size:9px;color:var(--dim);width:130px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}}
+.bar-track{{flex:1;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;}}
+.bar-fill{{height:100%;border-radius:2px;}}
+.bar-n{{font-size:9px;color:var(--dim);width:22px;text-align:right;flex-shrink:0;}}
+.bar-p{{font-size:9px;color:var(--g3);width:34px;text-align:right;flex-shrink:0;}}
+.log-section{{background:var(--panel);border:1px solid var(--border);border-radius:4px;overflow:hidden;opacity:0;animation:fadeUp 0.4s ease 0.35s forwards;position:relative;}}
+.log-section::before{{content:"";position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--amber),transparent);opacity:0.5;}}
+.log-top{{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;border-bottom:1px solid var(--border);}}
+.log-top h3{{font-family:"Orbitron",monospace;font-size:11px;font-weight:700;color:var(--amber);letter-spacing:3px;}}
+.log-right{{display:flex;align-items:center;gap:8px;}}
+.pill{{font-size:8px;color:var(--g3);border:1px solid var(--border);padding:2px 10px;letter-spacing:1px;}}
+.pdf-link{{font-size:8px;color:var(--amber);text-decoration:none;border:1px solid rgba(255,170,0,0.4);padding:4px 12px;border-radius:2px;transition:all 0.2s;}}
+.pdf-link:hover{{background:rgba(255,170,0,0.08);}}
+table{{width:100%;border-collapse:collapse;}}
+thead th{{padding:9px 14px;text-align:left;font-size:7px;color:var(--g3);letter-spacing:2px;text-transform:uppercase;border-bottom:1px solid var(--border);background:var(--bg3);}}
+tbody tr{{border-bottom:1px solid rgba(0,255,65,0.05);transition:background 0.15s;}}
+tbody tr:last-child{{border-bottom:none;}}
+tbody tr:hover{{background:rgba(0,255,65,0.03);}}
+td{{padding:10px 14px;font-size:10px;color:var(--text);}}
+.td-m{{font-size:9px;color:var(--dim);}} .td-ip{{font-size:10px;color:var(--cyan);}}
+.td-p{{font-size:8px;color:rgba(0,255,65,0.3);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}}
+.badge{{display:inline-flex;align-items:center;padding:2px 7px;border-radius:2px;font-size:7px;letter-spacing:1px;border:1px solid;}}
+.b-sql{{color:var(--red);border-color:rgba(255,0,64,0.3);background:rgba(255,0,64,0.06);}}
+.b-xss{{color:var(--amber);border-color:rgba(255,170,0,0.3);background:rgba(255,170,0,0.06);}}
+.b-cmd{{color:var(--cyan);border-color:rgba(0,255,255,0.3);background:rgba(0,255,255,0.06);}}
+.b-path{{color:var(--orange);border-color:rgba(255,136,0,0.3);background:rgba(255,136,0,0.06);}}
+.b-block{{color:var(--red);border-color:rgba(255,0,64,0.3);background:rgba(255,0,64,0.06);}}
+.b-unk{{color:var(--dim);border-color:var(--border);}}
+.sev-b{{display:inline-block;padding:2px 6px;border-radius:2px;font-size:7px;letter-spacing:1px;border:1px solid;}}
+.sev-CRITICAL{{color:var(--red);border-color:rgba(255,0,64,0.4);background:rgba(255,0,64,0.07);}}
+.sev-HIGH{{color:var(--amber);border-color:rgba(255,170,0,0.4);background:rgba(255,170,0,0.07);}}
+.sev-MEDIUM{{color:var(--cyan);border-color:rgba(0,255,255,0.3);background:rgba(0,255,255,0.05);}}
+.sev-LOW{{color:var(--g);border-color:rgba(0,255,65,0.3);background:rgba(0,255,65,0.05);}}
+.empty{{text-align:center;padding:60px;color:var(--dim);font-size:11px;}}
 </style>
-</head><body>""" + nav('/report') + """
+<script>
+window.addEventListener("DOMContentLoaded",function(){{
+  var cv=document.getElementById("matrix"),ctx=cv.getContext("2d");
+  var chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$%^&*()";
+  var W,H,cols,drops;
+  function init(){{W=cv.width=innerWidth;H=cv.height=innerHeight;cols=Math.floor(W/16);drops=[];for(var i=0;i<cols;i++)drops[i]=Math.random()*-50;}}
+  init();window.addEventListener("resize",init);
+  setInterval(function(){{
+    ctx.fillStyle="rgba(5,10,5,0.05)";ctx.fillRect(0,0,W,H);
+    for(var i=0;i<drops.length;i++){{var ch=chars[Math.floor(Math.random()*chars.length)],x=i*16,y=drops[i]*16;
+      ctx.fillStyle="#ccffcc";ctx.font="bold 13px monospace";ctx.fillText(ch,x,y);
+      if(y>H&&Math.random()>0.975)drops[i]=0;drops[i]++;}}
+  }},45);
+}});
+</script>
+</head><body>
+<canvas id="matrix"></canvas>
+<div class="scan-line"></div>
+<nav>
+  <a href="/" class="logo">W-IPS</a>
+  <div class="nav-links">
+    <a href="/" class="nav-link">HOME</a>
+    <a href="/dashboard" class="nav-link">DASHBOARD</a>
+    <a href="/simulate" class="nav-link">SIMULATOR</a>
+    <a href="/report" class="nav-link active">REPORT</a>
+    <a href="/download/pdf" class="nav-link nav-pdf">&#11015; PDF</a>
+  </div>
+</nav>
 <main>
-<div class="rep-header" style="opacity:0;animation:fadeUp 0.5s ease 0.1s forwards;">
-  <div class="rep-title">&#128202; THREAT INTELLIGENCE REPORT</div>
-  <div class="rep-sub">WEB APPLICATION INTRUSION PREVENTION SYSTEM — LIVE ANALYSIS</div>
-  <div class="rep-meta">
-    <div class="rep-meta-item">GENERATED: <span>""" + now_str + """</span></div>
-    <div class="rep-meta-item">TOTAL EVENTS: <span>""" + str(total) + """</span></div>
-    <div class="rep-meta-item">IPS BLOCKED: <span>""" + str(len(blocked_ips)) + """</span></div>
-    <div class="rep-meta-item">STATUS: <span style="color:var(--g);">&#9679; ACTIVE</span></div>
+  <div class="page-head">
+    <h1>ATTACK <span>REPORT</span></h1>
+    <p>REAL-TIME WAF INTRUSION DETECTION ANALYSIS</p>
+    <div class="refresh-row">
+      <div class="gen-t">GENERATED: {gen_time}</div>
+      <div class="cd" id="cd">REFRESH IN 30s</div>
+    </div>
   </div>
-</div>
-
-<div style="opacity:0;animation:fadeUp 0.4s ease 0.15s forwards;">
-  <div class="section-title">::: SYSTEM STATUS :::</div>
-  <div class="status-row">
-    <div class="status-pill sp-online">&#9679; WAF ONLINE</div>
-    <div class="status-pill sp-block">&#128683; """ + str(len(blocked_ips)) + """ IPS BLOCKED</div>
-    <div class="status-pill sp-log">&#128203; """ + str(total) + """ EVENTS LOGGED</div>
-    <div class="status-pill sp-online">&#9989; 100% BLOCK RATE</div>
+  <div class="stats">
+    <div class="stat s-r"><div class="stat-n">{total}</div><div class="stat-l">Total</div></div>
+    <div class="stat s-a"><div class="stat-n">{sql_c}</div><div class="stat-l">SQL</div></div>
+    <div class="stat s-v"><div class="stat-n">{xss_c}</div><div class="stat-l">XSS</div></div>
+    <div class="stat s-c"><div class="stat-n">{cmd_c}</div><div class="stat-l">CMD</div></div>
+    <div class="stat s-o"><div class="stat-n">{path_c}</div><div class="stat-l">Path</div></div>
+    <div class="stat s-g"><div class="stat-n">{len(blocked)}</div><div class="stat-l">Blocked IPs</div></div>
   </div>
-</div>
-
-<div class="stat-row stat-4" style="animation-delay:0.2s;">
-  <div class="stat s-r"><div class="stat-n">""" + str(total) + """</div><div class="stat-l">Total Attacks</div></div>
-  <div class="stat s-a"><div class="stat-n">""" + str(len(blocked_ips)) + """</div><div class="stat-l">IPs Blocked</div></div>
-  <div class="stat s-c"><div class="stat-n">""" + str(sev_c) + """</div><div class="stat-l">Critical Severity</div></div>
-  <div class="stat s-g"><div class="stat-n">""" + str(sev_h) + """</div><div class="stat-l">High Severity</div></div>
-</div>
-
-<div class="panel" style="animation-delay:0.25s;">
-  <div class="section-title">::: ATTACK BREAKDOWN BY TYPE :::</div>
-  <div class="threat-grid">
-    <div class="threat-card tc-sql"><div class="tc-num">""" + str(sql) + """</div><div class="tc-lbl">SQL Injection</div></div>
-    <div class="threat-card tc-xss"><div class="tc-num">""" + str(xss) + """</div><div class="tc-lbl">XSS Attack</div></div>
-    <div class="threat-card tc-cmd"><div class="tc-num">""" + str(cmd) + """</div><div class="tc-lbl">CMD Injection</div></div>
-    <div class="threat-card tc-path"><div class="tc-num">""" + str(path) + """</div><div class="tc-lbl">Path Traversal</div></div>
-    <div class="threat-card tc-honey"><div class="tc-num">""" + str(honey) + """</div><div class="tc-lbl">Honeypot</div></div>
-    <div class="threat-card tc-ldap"><div class="tc-num">""" + str(ldap) + """</div><div class="tc-lbl">LDAP Injection</div></div>
-    <div class="threat-card tc-rce"><div class="tc-num">""" + str(rce) + """</div><div class="tc-lbl">RCE Attempt</div></div>
-    <div class="threat-card tc-other"><div class="tc-num">""" + str(max(0,other)) + """</div><div class="tc-lbl">Other</div></div>
+  <div class="breakdown">
+    <div class="card">
+      <div class="card-title">ATTACK TYPE BREAKDOWN</div>
+      <div class="card-sub">DISTRIBUTION BY CATEGORY</div>
+      {bars_type}
+    </div>
+    <div class="card">
+      <div class="card-title">TOP ATTACKER IPs</div>
+      <div class="card-sub">MOST FREQUENT SOURCES</div>
+      {bars_ip}
+    </div>
   </div>
-
-  <div class="section-title" style="margin-top:8px;">::: THREAT DISTRIBUTION :::</div>
-  """ + (f'''
-  <div class="bar-wrap"><div class="bar-label"><span>SQL Injection</span><span>{sql}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(sql/max(total,1)*100))}%;background:var(--red);"></div></div></div>
-  <div class="bar-wrap"><div class="bar-label"><span>XSS Attack</span><span>{xss}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(xss/max(total,1)*100))}%;background:var(--amber);"></div></div></div>
-  <div class="bar-wrap"><div class="bar-label"><span>CMD Injection</span><span>{cmd}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(cmd/max(total,1)*100))}%;background:var(--cyan);"></div></div></div>
-  <div class="bar-wrap"><div class="bar-label"><span>Path Traversal</span><span>{path}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(path/max(total,1)*100))}%;background:var(--orange);"></div></div></div>
-  <div class="bar-wrap"><div class="bar-label"><span>Honeypot</span><span>{honey}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(honey/max(total,1)*100))}%;background:var(--violet);"></div></div></div>
-  <div class="bar-wrap"><div class="bar-label"><span>LDAP Injection</span><span>{ldap}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(ldap/max(total,1)*100))}%;background:var(--g);"></div></div></div>
-  <div class="bar-wrap"><div class="bar-label"><span>RCE Attempt</span><span>{rce}</span></div><div class="bar-track"><div class="bar-fill" style="width:{min(100,round(rce/max(total,1)*100))}%;background:var(--red);"></div></div></div>
-  ''' if total > 0 else '<div style="color:var(--dim);font-size:10px;padding:20px 0;">No attacks logged yet. Use the simulator to generate data.</div>') + """
-</div>
-
-<div class="panel" style="animation-delay:0.3s;padding:0;overflow:hidden;">
-  <div style="padding:16px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
-    <div class="section-title" style="margin-bottom:0;">::: RECENT ATTACK LOG (LAST 50) :::</div>
-    <button class="print-btn" onclick="window.print()">&#128438; PRINT REPORT</button>
+  <div class="log-section">
+    <div class="log-top">
+      <h3>FULL ATTACK LOG</h3>
+      <div class="log-right">
+        <div class="pill">{total} ENTRIES</div>
+        <a href="/download/pdf" class="pdf-link">&#11015; DOWNLOAD PDF</a>
+      </div>
+    </div>
+    {log_table}
   </div>
-  """ + (f'''<table>
-    <thead><tr><th>#</th><th>TIMESTAMP</th><th>SOURCE IP</th><th>ATTACK TYPE</th><th>SEVERITY</th><th>PAYLOAD</th></tr></thead>
-    <tbody>{rows}</tbody>
-  </table>''' if total > 0 else '<div style="padding:30px;color:var(--dim);font-size:10px;text-align:center;">No attacks logged yet — run the simulator to generate entries.</div>') + """
-</div>
-
-<div style="text-align:center;padding:20px 0 40px;opacity:0;animation:fadeUp 0.4s ease 0.4s forwards;">
-  <a href="/simulate" class="btn btn-r" style="margin-right:10px;">&#9889; RUN SIMULATOR</a>
-  <a href="/dashboard" class="btn btn-c" style="margin-right:10px;">&#128202; LIVE DASHBOARD</a>
-  <a href="/admin" class="btn btn-a">&#128274; ADMIN PANEL</a>
-</div>
 </main>
-</body></html>""")
+<script>
+var s=30,cd=document.getElementById("cd");
+setInterval(function(){{s--;if(s<=0){{location.reload();return;}}cd.textContent="REFRESH IN "+s+"s";}},1000);
+</script>
+</body></html>'''
+    return html
+
+
+@app.route('/download/pdf')
+def download_pdf():
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        return "[ERROR] fpdf2 not installed. Add fpdf2 to requirements.txt and redeploy.", 500
+
+    from collections import Counter as _Counter
+    import io as _io
+
+    logs        = load_logs()
+    total       = len(logs)
+    blocked, _  = load_blocked()
+    gen_time    = datetime.now().strftime('%d %b %Y  %H:%M:%S')
+    type_counts = _Counter(l.get('attack_type', 'Unknown') for l in logs)
+    ip_counts   = _Counter(l.get('ip', '?') for l in logs)
+
+    color_map = {
+        'SQL_INJECTION':    ((220, 50,  50), 'CRITICAL'),
+        'SQL Injection':    ((220, 50,  50), 'CRITICAL'),
+        'XSS':              ((220,150,  30), 'HIGH'),
+        'CMD_INJECTION':    ((30, 180, 180), 'CRITICAL'),
+        'Command Injection':((30, 180, 180), 'CRITICAL'),
+        'PATH_TRAVERSAL':   ((220,120,  30), 'HIGH'),
+        'Path Traversal':   ((220,120,  30), 'HIGH'),
+        'LDAP_INJECTION':   ((168, 85, 247), 'HIGH'),
+        'RCE':              ((220, 50,  50), 'CRITICAL'),
+        'Honeypot':         ((220,150,  30), 'CRITICAL'),
+        'Brute Force':      ((150, 80, 200), 'HIGH'),
+        'Unknown':          ((120,130, 140), 'LOW'),
+    }
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.set_margins(15, 15, 15)
+    pdf.add_page()
+
+    pdf.set_fill_color(10, 25, 10); pdf.rect(0, 0, 210, 40, 'F')
+    pdf.set_font('Helvetica', 'B', 20); pdf.set_text_color(0, 220, 60)
+    pdf.set_xy(0, 10); pdf.cell(210, 10, 'WEB APPLICATION IPS', align='C')
+    pdf.set_font('Helvetica', '', 10); pdf.set_text_color(0, 150, 40)
+    pdf.set_xy(0, 22); pdf.cell(210, 10, 'Intrusion Prevention System - Attack Report', align='C')
+    pdf.ln(30)
+
+    pdf.set_fill_color(15, 30, 15); pdf.rect(15, 45, 180, 36, 'F')
+    pdf.set_draw_color(0, 180, 50); pdf.rect(15, 45, 180, 36)
+    pdf.set_font('Helvetica', '', 9); pdf.set_text_color(0, 180, 50)
+    pdf.set_xy(20, 49); pdf.cell(80, 6, 'Generated:')
+    pdf.set_text_color(200, 255, 200); pdf.cell(0, 6, gen_time, ln=True)
+    pdf.set_xy(20, 57); pdf.set_text_color(0, 180, 50); pdf.cell(80, 6, 'Total Attacks Detected:')
+    pdf.set_text_color(220, 50, 50); pdf.cell(0, 6, str(total), ln=True)
+    pdf.set_xy(20, 65); pdf.set_text_color(0, 180, 50); pdf.cell(80, 6, 'IPs Permanently Blocked:')
+    pdf.set_text_color(0, 220, 60); pdf.cell(0, 6, str(len(blocked)), ln=True)
+    pdf.ln(20)
+
+    def section_hdr(txt):
+        pdf.set_fill_color(10, 25, 10); pdf.rect(15, pdf.get_y(), 180, 8, 'F')
+        pdf.set_font('Helvetica', 'B', 9); pdf.set_text_color(0, 220, 60)
+        pdf.cell(180, 8, '  ' + txt, ln=True)
+        pdf.set_draw_color(0, 180, 50); pdf.set_line_width(0.3)
+        pdf.line(15, pdf.get_y(), 195, pdf.get_y()); pdf.ln(3)
+
+    section_hdr('SUMMARY')
+    summary_rows = [
+        ('Total Attacks Detected', str(total), (220,50,50)),
+        ('SQL Injection', str(type_counts.get('SQL_INJECTION',0)+type_counts.get('SQL Injection',0)), (220,150,30)),
+        ('XSS Attacks',  str(type_counts.get('XSS',0)), (150,80,200)),
+        ('CMD Injection', str(type_counts.get('CMD_INJECTION',0)+type_counts.get('Command Injection',0)), (30,180,180)),
+        ('Path Traversal', str(type_counts.get('PATH_TRAVERSAL',0)+type_counts.get('Path Traversal',0)), (220,120,30)),
+        ('LDAP Injection', str(type_counts.get('LDAP_INJECTION',0)), (168,85,247)),
+        ('RCE Attempts',  str(type_counts.get('RCE',0)), (220,50,50)),
+        ('IPs Blocked',   str(len(blocked)), (0,200,60)),
+    ]
+    for label, val, clr in summary_rows:
+        pdf.set_font('Helvetica', '', 9); pdf.set_text_color(140,180,140)
+        pdf.set_x(15); pdf.cell(120, 6, label)
+        pdf.set_font('Helvetica', 'B', 9); pdf.set_text_color(*clr)
+        pdf.cell(0, 6, val, ln=True)
+    pdf.ln(6)
+
+    section_hdr('ATTACK TYPE BREAKDOWN')
+    pdf.set_fill_color(10,30,10); pdf.set_font('Helvetica','B',8); pdf.set_text_color(0,180,50)
+    pdf.set_x(15)
+    pdf.cell(70,7,'ATTACK TYPE',fill=True); pdf.cell(25,7,'COUNT',fill=True)
+    pdf.cell(30,7,'PERCENTAGE',fill=True); pdf.cell(0,7,'SEVERITY',fill=True,ln=True)
+    for atype, count in type_counts.most_common():
+        if pdf.get_y() > 260: pdf.add_page()
+        pct = f'{round(count/total*100,1)}%' if total > 0 else '0%'
+        clr, sev = color_map.get(atype, ((120,130,140),'LOW'))
+        pdf.set_font('Helvetica','',9); pdf.set_text_color(180,220,180); pdf.set_x(15); pdf.cell(70,6,atype)
+        pdf.set_font('Helvetica','B',9); pdf.set_text_color(*clr)
+        pdf.cell(25,6,str(count)); pdf.cell(30,6,pct); pdf.cell(0,6,sev,ln=True)
+    pdf.ln(6)
+
+    section_hdr('TOP ATTACKER IPs')
+    pdf.set_fill_color(10,30,10); pdf.set_font('Helvetica','B',8); pdf.set_text_color(0,180,50)
+    pdf.set_x(15)
+    pdf.cell(60,7,'IP ADDRESS',fill=True); pdf.cell(30,7,'ATTACKS',fill=True)
+    pdf.cell(0,7,'PERCENTAGE',fill=True,ln=True)
+    for ip_addr, count in ip_counts.most_common(10):
+        if pdf.get_y() > 260: pdf.add_page()
+        pct = f'{round(count/total*100,1)}%' if total > 0 else '0%'
+        pdf.set_font('Helvetica','',9); pdf.set_text_color(30,180,180); pdf.set_x(15); pdf.cell(60,6,ip_addr)
+        pdf.set_font('Helvetica','B',9); pdf.set_text_color(220,50,50); pdf.cell(30,6,str(count))
+        pdf.set_text_color(180,220,180); pdf.set_font('Helvetica','',9); pdf.cell(0,6,pct,ln=True)
+    pdf.ln(6)
+
+    if logs:
+        pdf.add_page()
+        section_hdr(f'FULL ATTACK LOG  ({total} entries)')
+        col_w = [8, 38, 28, 28, 20, 38]
+        pdf.set_fill_color(10,30,10); pdf.set_font('Helvetica','B',7); pdf.set_text_color(0,180,50); pdf.set_x(15)
+        for txt, w in zip(['#','TIMESTAMP','IP ADDRESS','TYPE','SEVERITY','PAYLOAD'], col_w):
+            pdf.cell(w, 6, txt, fill=True)
+        pdf.ln()
+        sev_colors = {'CRITICAL':(220,50,50),'HIGH':(220,150,30),'MEDIUM':(30,180,180),'LOW':(0,180,50)}
+        for idx, log in enumerate(reversed(logs), 1):
+            if pdf.get_y() > 268:
+                pdf.add_page()
+                pdf.set_fill_color(10,30,10); pdf.set_font('Helvetica','B',7); pdf.set_text_color(0,180,50); pdf.set_x(15)
+                for txt, w in zip(['#','TIMESTAMP','IP ADDRESS','TYPE','SEVERITY','PAYLOAD'], col_w):
+                    pdf.cell(w, 6, txt, fill=True)
+                pdf.ln()
+            atype = log.get('attack_type','Unknown')
+            clr, _ = color_map.get(atype, ((120,130,140),'LOW'))
+            sev = log.get('severity','HIGH')
+            pdf.set_font('Helvetica','',7); pdf.set_x(15)
+            pdf.set_text_color(120,130,140); pdf.cell(col_w[0],5,str(idx))
+            pdf.set_text_color(120,140,120); pdf.cell(col_w[1],5,str(log.get('time',''))[:20])
+            pdf.set_text_color(30,180,180);  pdf.cell(col_w[2],5,str(log.get('ip',''))[:15])
+            pdf.set_text_color(*clr); pdf.set_font('Helvetica','B',7); pdf.cell(col_w[3],5,atype[:14])
+            pdf.set_font('Helvetica','',7)
+            pdf.set_text_color(*sev_colors.get(sev,(120,130,140))); pdf.cell(col_w[4],5,sev)
+            pdf.set_text_color(100,130,100); pdf.cell(col_w[5],5,str(log.get('payload',''))[:25],ln=True)
+
+    pdf_bytes = bytes(pdf.output())
+    return send_file(
+        _io.BytesIO(pdf_bytes), mimetype='application/pdf',
+        as_attachment=True,
+        download_name=f'waf_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf'
+    )
+
 
 
 # ── ADMIN PAGE ────────────────────────────────────────────────────────────────
